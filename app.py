@@ -301,15 +301,26 @@ def join(opt):
 			return True
 		return False
 	except: return False
-def count(url):
+def count(url, br=None):
+	args = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-config", "--no-playlist-js-player", "--flat-playlist", "--playlist-end", "61", "--print", "id", url]
 	try:
-		args = [sys.executable, "-m", "yt_dlp", "--flat-playlist", "--print", "playlist_count", url]
-		res = subprocess.run(args, capture_output=True, text=True)
-		if res.returncode == 0:
-			lines = res.stdout.strip().split("\n")
-			for l in lines:
-				if l.strip().isdigit():
-					return int(l.strip())
+		ok = False
+		if br:
+			for b in br:
+				temp = args + ["--cookies-from-browser", b]
+				res = subprocess.run(temp, capture_output=True, text=True, stderr=subprocess.DEVNULL)
+				if res.returncode == 0:
+					ok = True
+					break
+			if not ok:
+				res = subprocess.run(args, capture_output=True, text=True, stderr=subprocess.DEVNULL)
+				ok = (res.returncode == 0)
+		else:
+			res = subprocess.run(args, capture_output=True, text=True, stderr=subprocess.DEVNULL)
+			ok = (res.returncode == 0)
+		if ok:
+			lines = [l.strip() for l in res.stdout.strip().split("\n") if l.strip()]
+			return len(lines)
 	except: pass
 	return 0
 def scan(ext):
@@ -370,15 +381,16 @@ def download(url, opt, has, br, path=None):
 		print(f"{red}[x] Need ffmpeg!{end}")
 		return False
 	if play:
-		num = count(url)
+		num = count(url, br)
 		limit = 0
 		if num > 60:
 			print(f"{yellow}[!] {num} tracks!{end}")
-			ans = input(f"{cyan}Limit (Enter for all): {end}").strip()
+			ans = input(f"{cyan}[?] Limit (Enter for all): {end}").strip()
 			if ans.isdigit():
 				limit = int(ans)
-		num = limit if limit > 0 else num
-		print(f"{yellow}[!] {num} tracks.{end}")
+		if limit > 0:
+			num = limit
+		print(f"{yellow}[i] {num}+ tracks{end}" if limit == 0 and num > 60 else f"{yellow}[i] {num} tracks{end}")
 		ext = ".mp3" if opt == "1" else ".mp4"
 		start = 1
 		old = ""
@@ -391,7 +403,7 @@ def download(url, opt, has, br, path=None):
 			idx = scan(ext)
 			if idx > 0:
 				print(f"{yellow}[i] Found 1-{idx}.{end}")
-				ans = input(f"{cyan}Resume from {idx + 1}? (y/n): {end}").strip().lower()
+				ans = input(f"{cyan}[?] Resume from {idx + 1}? (y/n): {end}").strip().lower()
 				if ans == "y":
 					start = idx + 1
 					wipe(keep=True)
@@ -407,7 +419,19 @@ def download(url, opt, has, br, path=None):
 				f.write(url)
 		except: pass
 		try:
-			subprocess.run([sys.executable, "-m", "yt_dlp", "--playlist-items", "1", "--write-thumbnail", "--skip-download", "-o", "temp/cover", url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+			thargs = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-config", "--playlist-items", "1", "--write-thumbnail", "--skip-download", "-o", "temp/cover"]
+			okth = False
+			if br:
+				for b in br:
+					tempth = thargs + ["--cookies-from-browser", b, url]
+					resth = subprocess.run(tempth, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+					if resth.returncode == 0:
+						okth = True
+						break
+				if not okth:
+					subprocess.run(thargs + [url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+			else:
+				subprocess.run(thargs + [url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 			for x in [".webp", ".png", ".jpg"]:
 				f = os.path.join("temp", "cover" + x)
 				if os.path.exists(f):
@@ -480,8 +504,8 @@ def download(url, opt, has, br, path=None):
 					print(f"\a{red}{bold}[x] Failed!{end}")
 					return False
 			else:
-				print(f"{red}[!] Download failed!{end}")
-				ans = input(f"{cyan}Merge anyway? (y/n): {end}").strip().lower()
+				print(f"{red}[x] Failed!{end}")
+				ans = input(f"{cyan}[?] Merge anyway? (y/n): {end}").strip().lower()
 				if ans == "y":
 					print(f"{yellow}Merging...{end}")
 					if join(opt):
@@ -491,7 +515,7 @@ def download(url, opt, has, br, path=None):
 						print(f"\a{red}{bold}[x] Failed!{end}")
 						return False
 				else:
-					print(f"{yellow}[i] Kept temp. Run again to resume.{end}")
+					print(f"{yellow}[i] Temp kept{end}")
 					return False
 		else:
 			if ok:
@@ -509,6 +533,15 @@ def run():
 	has = setup()
 	clear()
 	br = browsers()
+	try:
+		if sys.platform == "win32":
+			task = subprocess.run(["tasklist"], capture_output=True, text=True)
+			out = task.stdout.lower()
+			for b in br:
+				exe = "chrome.exe" if b == "chrome" else "msedge.exe" if b == "edge" else "firefox.exe" if b == "firefox" else ""
+				if exe and exe in out:
+					print(f"{yellow}[!] {b.capitalize()} active (cookies may lock){end}")
+	except: pass
 	try:
 		while True:
 			raw = input(f"{pink}[>] Link: {end}").strip()
@@ -535,13 +568,13 @@ def run():
 					limit = 0
 					if num > 60:
 						print(f"{yellow}[!] {num} tracks!{end}")
-						ans = input(f"{cyan}Limit (Enter for all): {end}").strip()
+						ans = input(f"{cyan}[?] Limit (Enter for all): {end}").strip()
 						if ans.isdigit():
 							limit = int(ans)
 					if limit > 0:
 						songs = songs[:limit]
-					print(f"{yellow}[!] {len(songs)} tracks.{end}")
-					opt = input(f"{cyan}[*] Format (1. MP3 | 2. MP4): {end}").strip()
+					print(f"{yellow}[i] {len(songs)} tracks.{end}")
+					opt = input(f"{cyan}[?] Format (1. MP3 | 2. MP4): {end}").strip()
 					if opt not in ["1", "2"]:
 						print(f"{red}[x] Invalid!{end}")
 						continue
@@ -567,7 +600,7 @@ def run():
 					arts = song.get("artist", "")
 					query = f"{title} {arts}".strip()
 					print(f"{cyan}[1/1] {query}{end}")
-					opt = input(f"{cyan}[*] Format (1. MP3 | 2. MP4): {end}").strip()
+					opt = input(f"{cyan}[?] Format (1. MP3 | 2. MP4): {end}").strip()
 					if opt not in ["1", "2"]:
 						print(f"{red}[x] Invalid!{end}")
 						continue
@@ -586,7 +619,7 @@ def run():
 					url = f"https://www.youtube.com/watch?v={vid}&list={lst}"
 				else:
 					if "youtube.com/watch" in url or "youtu.be/" in url:
-						ans = input(f"{cyan}1. Playlist | 2. Video: {end}").strip()
+						ans = input(f"{cyan}[?] 1. Playlist | 2. Video: {end}").strip()
 						if ans == "1":
 							url = "https://www.youtube.com/playlist?list=" + lst
 						else:
@@ -598,7 +631,7 @@ def run():
 					else:
 						url = "https://www.youtube.com/playlist?list=" + lst
 			elif "bilibili.com" in url and ("?p=" in url or "multi" in url):
-				ans = input(f"{cyan}1. Playlist | 2. Video: {end}").strip()
+				ans = input(f"{cyan}[?] 1. Playlist | 2. Video: {end}").strip()
 				if ans != "1": url += "&single"
 			elif "/playlist" in url or "/album" in url or "/sets/" in url or "/mix/" in url:
 				pass
@@ -607,7 +640,7 @@ def run():
 					if "&" in url: url = url.split("&")[0]
 				elif "bilibili.com" in url: pass
 				elif "?" in url: url = url.split("?")[0]
-			opt = input(f"{cyan}[*] Format (1. MP3 | 2. MP4): {end}").strip()
+			opt = input(f"{cyan}[?] Format (1. MP3 | 2. MP4): {end}").strip()
 			if opt not in ["1", "2"]:
 				print(f"{red}[x] Invalid!{end}")
 				continue
