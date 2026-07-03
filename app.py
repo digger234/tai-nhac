@@ -3,11 +3,9 @@ import sys
 import subprocess
 import urllib.request
 import urllib.parse
-import urllib.error
 import zipfile
 import json
 import base64
-import time
 try:
 	sys.stdout.reconfigure(encoding='utf-8')
 	sys.stderr.reconfigure(encoding='utf-8')
@@ -25,19 +23,39 @@ def clear():
 def setup():
 	env = sys.platform
 	has = False
+	dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "ffmpeg")
+	if env == "win32" and os.path.exists(os.path.join(dir, "ffmpeg.exe")):
+		if dir not in os.environ["PATH"]:
+			os.environ["PATH"] = dir + os.pathsep + os.environ["PATH"]
 	try:
 		subprocess.run(["ffmpeg", "-version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 		has = True
-	except:
-		dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "ffmpeg")
-		if os.path.exists(os.path.join(dir, "ffmpeg.exe")):
-			has = True
-			os.environ["PATH"] += os.pathsep + dir
+	except: pass
+	old = False
+	if has:
+		try:
+			res = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
+			out = res.stdout.strip()
+			if "version" in out:
+				ver = out.split("version")[1].split()[0].strip()
+				val = ver.lstrip('nN-')
+				if '-' in val:
+					year = val.split('-')[0]
+					if year.isdigit() and int(year) < 2025:
+						old = True
+				else:
+					parts = val.split('.')
+					if parts[0].isdigit() and int(parts[0]) < 5:
+						old = True
+		except: pass
+	if old and (env == "win32" or os.path.exists("/data/data/com.termux")):
+		has = False
 	if env == "win32" and not has:
 		print(f"{yellow}Installing ffmpeg...{end}")
 		try:
 			dir = os.path.join(os.path.expanduser("~"), "AppData", "Local", "ffmpeg")
-			os.makedirs(dir, exist_ok=True)
+			if not os.path.exists(dir):
+				os.makedirs(dir)
 			src = "https://github.com/yt-dlp/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
 			zip = os.path.join(dir, "ffmpeg.zip")
 			urllib.request.urlretrieve(src, zip)
@@ -50,7 +68,8 @@ def setup():
 							out.write(z.read(f))
 			os.remove(zip)
 			subprocess.run(f'setx PATH "%PATH%;{dir}"', shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-			os.environ["PATH"] += os.pathsep + dir
+			if dir not in os.environ["PATH"]:
+				os.environ["PATH"] = dir + os.pathsep + os.environ["PATH"]
 			has = True
 			print(f"{green}ffmpeg ready!{end}")
 		except:
@@ -64,8 +83,11 @@ def setup():
 		except:
 			print(f"{red}ffmpeg failed!{end}")
 	try:
-		subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-	except: pass
+		import yt_dlp
+	except:
+		try:
+			subprocess.run([sys.executable, "-m", "pip", "install", "-U", "yt-dlp"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+		except: pass
 	return has
 def token():
 	global session
@@ -169,32 +191,45 @@ def save(song, opt, has, br, path=None):
 	out = path
 	if not out:
 		out = clean(f"{title} - {arts}") + (".mp3" if opt == "1" else ".mp4")
+	single = not path
+	tmp = "Temp"
+	dest = os.path.join(tmp, out) if single else out
+	if single:
+		if not os.path.exists(tmp):
+			os.makedirs(tmp)
 	ok = False
-	if opt == "1":
-		lnk = link(song)
-		if lnk:
-			print(f"{yellow}Downloading MP3...{end}")
-			ok = retrieve(lnk, out)
-			if ok:
-				print(f"\a{green}{bold}[v] Success!{end}")
-			else:
-				print(f"\a{red}{bold}[x] Failed!{end}")
-			if ok and not path:
-				cover = song.get("cover", "")
-				if cover:
-					try:
-						urllib.request.urlretrieve(cover, "temp.jpg")
-						subprocess.run(["ffmpeg", "-y", "-i", out, "-i", "temp.jpg", "-c", "copy", "-map", "0", "-map", "1", "-id3v2_version", "3", "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (Front)", "tagged.mp3"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-						if os.path.exists("tagged.mp3") and os.path.getsize("tagged.mp3") > 0:
-							os.remove(out)
-							os.rename("tagged.mp3", out)
-					except: pass
-					finally:
-						if os.path.exists("temp.jpg"):
-							try: os.remove("temp.jpg")
-							except: pass
-	if not ok:
-		ok = download("ytsearch:" + query, opt, has, br, path=out)
+	try:
+		if opt == "1":
+			lnk = link(song)
+			if lnk:
+				print(f"{yellow}Downloading MP3...{end}")
+				ok = retrieve(lnk, dest)
+				if ok:
+					print(f"\a{green}{bold}[v] Success!{end}")
+				else:
+					print(f"\a{red}{bold}[x] Failed!{end}")
+				if ok and single:
+					cover = song.get("cover", "")
+					if cover:
+						try:
+							urllib.request.urlretrieve(cover, os.path.join(tmp, "temp.jpg"))
+							subprocess.run(["ffmpeg", "-y", "-i", dest, "-i", os.path.join(tmp, "temp.jpg"), "-c", "copy", "-map", "0", "-map", "1", "-id3v2_version", "3", "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (Front)", os.path.join(tmp, "tagged.mp3")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+							if os.path.exists(os.path.join(tmp, "tagged.mp3")) and os.path.getsize(os.path.join(tmp, "tagged.mp3")) > 0:
+								os.remove(dest)
+								os.rename(os.path.join(tmp, "tagged.mp3"), dest)
+						except: pass
+						finally:
+							if os.path.exists(os.path.join(tmp, "temp.jpg")):
+								try: os.remove(os.path.join(tmp, "temp.jpg"))
+								except: pass
+		if not ok:
+			ok = download("ytsearch:" + query, opt, has, br, path=dest)
+		if single and ok and os.path.exists(dest):
+			try: os.replace(dest, out)
+			except: ok = False
+	finally:
+		if single:
+			wipe(tmp, rm=True)
 	return ok
 def fetch(url, full=False):
 	try:
@@ -208,11 +243,14 @@ def fetch(url, full=False):
 		if title: return f"ytsearch:{title} {name}".strip()
 	except: pass
 	return None
-def wipe(keep=False):
-	if not os.path.exists("temp"): return
-	for f in os.listdir("temp"):
+def wipe(dir="temp", keep=False, rm=False):
+	if not os.path.exists(dir): return
+	for f in os.listdir(dir):
 		if keep and not (f.endswith(".part") or f.endswith(".ytdl")): continue
-		try: os.remove(os.path.join("temp", f))
+		try: os.remove(os.path.join(dir, f))
+		except: pass
+	if rm:
+		try: os.rmdir(dir)
 		except: pass
 def join(opt):
 	dir = "temp"
@@ -365,17 +403,24 @@ def browsers():
 		for name, running in active.items():
 			if running and name in found:
 				found.remove(name)
-				found.append(name)
+				found.insert(0, name)
 	except: pass
 	return found
 def download(url, opt, has, br, path=None):
 	single = url.endswith("&single")
 	if single: url = url[:-7]
 	play = ("list=" in url or "/playlist" in url or "/album" in url or "/sets/" in url or "/mix/" in url or "bilibili.com" in url and ("?p=" in url or "multi" in url)) and not single
-	args = [sys.executable, "-m", "yt_dlp", "--no-warnings"]
+	target = path
+	solo = not play and (not path or not (path.startswith("temp/") or path.startswith("temp\\") or path.startswith("Temp/") or path.startswith("Temp\\")))
+	tmp = "Temp"
+	if solo:
+		if not os.path.exists(tmp):
+			os.makedirs(tmp)
+		path = os.path.join(tmp, os.path.basename(path)) if path else os.path.join(tmp, "%(title)s.%(ext)s")
+	args = [sys.executable, "-m", "yt_dlp", "--no-warnings", "--no-config", "--concurrent-fragments", "5"]
 	if has and ("youtube.com" in url or "youtu.be" in url or url.startswith("ytsearch:")):
 		args.extend(["--embed-metadata", "--sponsorblock-remove", "music_offtopic"])
-		if not play and not path:
+		if not play and not target:
 			args.append("--embed-thumbnail")
 	if play and not has:
 		print(f"{red}[x] Need ffmpeg!{end}")
@@ -410,10 +455,12 @@ def download(url, opt, has, br, path=None):
 				else:
 					wipe()
 			else:
-				os.makedirs("temp", exist_ok=True)
+				if not os.path.exists("temp"):
+					os.makedirs("temp")
 		else:
 			wipe()
-			os.makedirs("temp", exist_ok=True)
+			if not os.path.exists("temp"):
+				os.makedirs("temp")
 		try:
 			with open(os.path.join("temp", "url.txt"), "w", encoding="utf-8") as f:
 				f.write(url)
@@ -445,7 +492,7 @@ def download(url, opt, has, br, path=None):
 		if limit > 0 and start > limit:
 			print(f"{green}[v] Done!{end}")
 			return True
-		args.append("--yes-playlist")
+		args.extend(["--yes-playlist", "--no-playlist-js-player"])
 		if start > 1:
 			args.extend(["--playlist-start", str(start)])
 		if limit > 0:
@@ -461,20 +508,20 @@ def download(url, opt, has, br, path=None):
 		if opt == "1":
 			if has:
 				args.extend(["-f", "bestaudio", "--extract-audio", "--audio-format", "mp3"])
-				if not path:
+				if not target:
 					print(f"{yellow}Downloading MP3...{end}")
 			else:
 				args.extend(["-f", "bestaudio[ext=m4a]/bestaudio"])
-				if not path:
+				if not target:
 					print(f"{yellow}Downloading M4A...{end}")
 		else:
 			if has:
 				args.extend(["-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/best", "--merge-output-format", "mp4"])
-				if not path:
+				if not target:
 					print(f"{yellow}Downloading MP4...{end}")
 			else:
 				args.extend(["-f", "best[ext=mp4]/best"])
-				if not path:
+				if not target:
 					print(f"{yellow}Downloading MP4...{end}")
 		if path:
 			args.extend(["-o", path])
@@ -489,10 +536,10 @@ def download(url, opt, has, br, path=None):
 					ok = True
 					break
 			if not ok:
-				res = subprocess.run(args, stderr=subprocess.DEVNULL if path else None)
+				res = subprocess.run(args, stderr=subprocess.DEVNULL if target else None)
 				ok = (res.returncode == 0)
 		else:
-			res = subprocess.run(args, stderr=subprocess.DEVNULL if path else None)
+			res = subprocess.run(args, stderr=subprocess.DEVNULL if target else None)
 			ok = (res.returncode == 0)
 		if play:
 			if ok:
@@ -518,6 +565,18 @@ def download(url, opt, has, br, path=None):
 					print(f"{yellow}[i] Temp kept{end}")
 					return False
 		else:
+			if ok and solo:
+				if target:
+					if os.path.exists(path):
+						os.replace(path, target)
+				else:
+					found = None
+					for f in os.listdir(tmp):
+						if f.endswith(".mp3") or f.endswith(".mp4") or f.endswith(".m4a"):
+							found = os.path.join(tmp, f)
+							break
+					if found:
+						os.replace(found, os.path.basename(found))
 			if ok:
 				print(f"\a{green}{bold}[v] Success!{end}")
 				return True
@@ -529,6 +588,9 @@ def download(url, opt, has, br, path=None):
 	except:
 		print(f"\a{red}{bold}[x] Error!{end}")
 		return False
+	finally:
+		if solo:
+			wipe(tmp, rm=True)
 def run():
 	has = setup()
 	clear()
@@ -580,7 +642,8 @@ def run():
 						continue
 					clear()
 					wipe()
-					os.makedirs("temp", exist_ok=True)
+					if not os.path.exists("temp"):
+						os.makedirs("temp")
 					if cover:
 						try: urllib.request.urlretrieve(cover, os.path.join("temp", "cover.jpg"))
 						except: pass
@@ -606,46 +669,41 @@ def run():
 						continue
 					clear()
 					save(song, opt, has, br)
-				again = input(f"{cyan}[?] Again? (y/n): {end}").strip().lower()
-				if again != "y":
-					print(f"{green}Bye!{end}")
-					break
-				clear()
-				continue
-			elif "list=" in url:
-				lst = url.split("list=")[1].split("&")[0]
-				if lst.startswith("RD") and len(lst) == 13:
-					vid = lst[2:]
-					url = f"https://www.youtube.com/watch?v={vid}&list={lst}"
+			else:
+				if "list=" in url:
+					lst = url.split("list=")[1].split("&")[0]
+					if lst.startswith("RD") and len(lst) == 13:
+						vid = lst[2:]
+						url = f"https://www.youtube.com/watch?v={vid}&list={lst}"
+					else:
+						if "youtube.com/watch" in url or "youtu.be/" in url:
+							ans = input(f"{cyan}[?] 1. Playlist | 2. Video: {end}").strip()
+							if ans == "1":
+								url = "https://www.youtube.com/playlist?list=" + lst
+							else:
+								if "?" in url:
+									base, query = url.split("?", 1)
+									parts = [p for p in query.split("&") if not p.startswith("list=")]
+									url = base + ("?" + "&".join(parts) if parts else "")
+								url += "&single"
+						else:
+							url = "https://www.youtube.com/playlist?list=" + lst
+				elif "bilibili.com" in url and ("?p=" in url or "multi" in url):
+					ans = input(f"{cyan}[?] 1. Playlist | 2. Video: {end}").strip()
+					if ans != "1": url += "&single"
+				elif "/playlist" in url or "/album" in url or "/sets/" in url or "/mix/" in url:
+					pass
 				else:
 					if "youtube.com/watch" in url or "youtu.be/" in url:
-						ans = input(f"{cyan}[?] 1. Playlist | 2. Video: {end}").strip()
-						if ans == "1":
-							url = "https://www.youtube.com/playlist?list=" + lst
-						else:
-							if "?" in url:
-								base, query = url.split("?", 1)
-								parts = [p for p in query.split("&") if not p.startswith("list=")]
-								url = base + ("?" + "&".join(parts) if parts else "")
-							url += "&single"
-					else:
-						url = "https://www.youtube.com/playlist?list=" + lst
-			elif "bilibili.com" in url and ("?p=" in url or "multi" in url):
-				ans = input(f"{cyan}[?] 1. Playlist | 2. Video: {end}").strip()
-				if ans != "1": url += "&single"
-			elif "/playlist" in url or "/album" in url or "/sets/" in url or "/mix/" in url:
-				pass
-			else:
-				if "youtube.com/watch" in url or "youtu.be/" in url:
-					if "&" in url: url = url.split("&")[0]
-				elif "bilibili.com" in url: pass
-				elif "?" in url: url = url.split("?")[0]
-			opt = input(f"{cyan}[?] Format (1. MP3 | 2. MP4): {end}").strip()
-			if opt not in ["1", "2"]:
-				print(f"{red}[x] Invalid!{end}")
-				continue
-			clear()
-			download(url, opt, has, br)
+						if "&" in url: url = url.split("&")[0]
+					elif "bilibili.com" in url: pass
+					elif "?" in url: url = url.split("?")[0]
+				opt = input(f"{cyan}[?] Format (1. MP3 | 2. MP4): {end}").strip()
+				if opt not in ["1", "2"]:
+					print(f"{red}[x] Invalid!{end}")
+					continue
+				clear()
+				download(url, opt, has, br)
 			again = input(f"{cyan}[?] Again? (y/n): {end}").strip().lower()
 			if again != "y":
 				print(f"{green}Bye!{end}")
